@@ -1,5 +1,13 @@
 #!/bin/bash
 
+#What this script does:
+#	Step 1. Make backup of sql-database
+#	Step 2. Make backup of all files in /var/www /etc/nginx (see toBack variable)
+#	Step 3. Encrypt
+#	Step 4. Upload backups to objectstore and owncloud
+#	Step 5. Remove temp backups locally
+#	Step 6. remove old backups from objectstore
+
 #path to temp backup place
 cd /var/nielsBackup
 
@@ -9,31 +17,55 @@ dbPass="xxx"
 
 toBack="/var/www /etc/nginx" #paths to backup, space separated
 
+#credentials objectstore
 osUser="xxx"
 osPass="xxx"
 osPath="https://xxx.objectstore.eu/backups"
 
-maxHours=100
+#credentials owncloud
+ocUser="xxx"
+ocPass="xxx"
+ocPath="https://xxx.xxx.com/remote.php/webdav/"
 
-#create new backups
+#encryption key
+gpgKey="xxx"
+
+#number of hours you want to store a backup
+maxHours=360
+
+#Step 1. Make backup of sql-database
 filenameDate=$(date +%Y-%m-%d-%H-%M-%S)
-maxDate=$(date +%Y%m%d%H%M%S -d "${maxHours} hours ago")
+filenameHostname=$(hostname -f)
 
-mysqldump -u $dbUser --password=$dbPass --all-databases | gzip --best > sql-backup-$filenameDate.sql.zip
-tar -czf www-backup-$filenameDate.zip $toBack
+#Step 2. Make backup of all files 
+mysqldump -u $dbUser --password=$dbPass --all-databases | gzip --best > $filenameHostname-sql-$filenameDate.sql.zip
+tar -czf $filenameHostname-www-$filenameDate.zip $toBack
 
-#upload new backups to objectstore
+#Step 3. Encrypt
 for file in *.zip; do
-	curl -X PUT -s -T $file --user $osUser:$osPass $osPath/$file
+	echo $gpgKey | gpg --batch -q --passphrase-fd 0 --cipher-algo AES256 -c $file
 done
 
-#remove new backups locally
-rm *.zip
+#Step 4. Upload backups
+for file in *.gpg; do
+	#to objectstore
+	curl -X PUT -s -T $file --user $osUser:$osPass $osPath/$file
+	#to owncloud
+	curl -T $file -u $ocUser:$ocPass -o /dev/stdout $ocPath
+done
 
-#remove old backups on objectstore
+#Step 5. Remove temp backups locally
+rm *.zip
+rm *.gpg
+
+#Step 6. remove old backups from objectstore
+maxDate=$(date +%Y%m%d%H%M%S -d "${maxHours} hours ago")
 while read fileName
 do
-	if [ "${fileName//[!0-9]/}" -lt $maxDate ]; then
+	fileDate=$fileName
+	fileDate=`expr "$fileDate" : '.*\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{2\}-[0-9]\{2\}\)'`
+	fileDate="${fileDate//-/}"
+	if [ $fileDate -lt $maxDate ]; then
 		curl -X DELETE -s --user $osUser:$osPass $osPath/$fileName
 	fi
 done  < <(curl -s --user $osUser:$osPass $osPath)
