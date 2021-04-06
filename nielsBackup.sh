@@ -4,7 +4,7 @@
 #	Step 1. Make backup of sql-database
 #	Step 2. Make backup of all files in /var/www /etc/nginx (see toBack variable)
 #	Step 3. Encrypt
-#	Step 4. Upload backups to objectstore and owncloud
+#	Step 4. Upload backups to objectstore, owncloud and s3
 #	Step 5. Remove temp backups locally
 #	Step 6. remove old backups from objectstore
 
@@ -27,6 +27,13 @@ ocUser="xxx"
 ocPass="xxx"
 ocPath="https://xxx.xxx.com/remote.php/webdav/"
 
+#credentials s3
+s3region="s3-eu-west-1"
+s3bucket="bucketname"
+s3path="dir/folfer/path"
+s3Key="xxx"
+s3Secret="xxx"
+
 #encryption key
 gpgKey="xxx"
 
@@ -48,10 +55,24 @@ done
 
 #Step 4. Upload backups
 for file in *.gpg; do
+
 	#to objectstore
 	curl -X PUT -s -T $file --user $osUser:$osPass $osPath/$file
+
 	#to owncloud
 	curl -T $file -u $ocUser:$ocPass -o /dev/stdout $ocPath
+	
+	#to s3
+	contentType="application/zip"
+	dateValue=`date -R`
+	stringToSign="PUT\n\n${contentType}\n${dateValue}\n/${s3bucket}/${s3path}/${file}"
+	signature=$(echo -en "${stringToSign}" | openssl sha1 -hmac "${s3Secret}" -binary | base64)
+	curl -X PUT -T "${file}" \
+	  -H "Host: ${s3bucket}.s3.amazonaws.com" \
+	  -H "Date: ${dateValue}" \
+	  -H "Content-Type: ${contentType}" \
+	  -H "Authorization: AWS ${s3Key}:${signature}" \
+	https://${s3region}.amazonaws.com/${s3path}/${file}
 done
 
 #Step 5. Remove temp backups locally
